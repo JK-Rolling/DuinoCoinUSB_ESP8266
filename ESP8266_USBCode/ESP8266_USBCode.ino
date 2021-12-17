@@ -133,8 +133,8 @@ void loop() {
         digitalWrite(LED_BUILTIN, LEDOFF);
         break;
         }
+        if (max_micros_elapsed(micros(), 250000))
+          handleSystemEvents();
     }
   }
-  if (max_micros_elapsed(micros(), 250000))
-    handleSystemEvents();
 }
