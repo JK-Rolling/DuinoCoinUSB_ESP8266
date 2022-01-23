@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Duino-Coin ESP8266 USB Miner 2.75 © MIT licensed
+Duino-Coin ESP8266 USB Miner 3.0 © MIT licensed
 JK Rolling
 
 Original Credit:
 https://duinocoin.com
 https://github.com/revoxhere/duino-coin
-Duino-Coin Team & Community 2019-2021
+Duino-Coin Team & Community 2019-2022
 """
 
-from os import _exit, execl, mkdir
+from os import _exit, mkdir
 from os import name as osname
 from os import path
 from os import system as ossystem
@@ -29,14 +29,13 @@ from datetime import datetime
 from statistics import mean
 from signal import SIGINT, signal
 from time import ctime, sleep, strptime, time
-from random import choice
-import select
 import pip
 
 from subprocess import DEVNULL, Popen, check_call, call
 from threading import Thread
 from threading import Lock as thread_lock
 from threading import Semaphore
+import os
 printlock = Semaphore(value=1)
 
 
@@ -96,7 +95,7 @@ def port_num(com):
 
 
 class Settings:
-    VER = '2.75'
+    VER = '3.0'
     SOC_TIMEOUT = 15
     REPORT_TIME = 120
     AVR_TIMEOUT = 8  # diff 6 * 100 / 196 h/s = 3.06
@@ -104,10 +103,16 @@ class Settings:
     DATA_DIR = "Duino-Coin ESP8266 Miner " + str(VER)
     SEPARATOR = ","
     ENCODING = "utf-8"
-    BLOCK = " ‖ "
+    try:
+        # Raspberry Pi latin users can't display this character
+        BLOCK = " ‖ "
+    except:
+        BLOCK = " | "
     PICK = ""
     COG = " @"
-    if osname != "nt":
+    if (osname != "nt"
+        or bool(osname == "nt"
+                and os.environ.get("WT_SESSION"))):
         # Windows' cmd does not support emojis, shame!
         PICK = " ⛏"
         COG = " ⚙"
@@ -134,16 +139,22 @@ class Client:
     def fetch_pool():
         while True:
             pretty_print("net0", " " + get_string("connection_search"),
-                         "warning")
+                         "info")
             try:
                 response = requests.get(
                     "https://server.duinocoin.com/getPool",
-                    timeout=5).json()
+                    timeout=10).json()
+
                 if response["success"] == True:
+                    pretty_print("net0", get_string("connecting_node")
+                                 + response["name"],
+                                 "info")
+
                     NODE_ADDRESS = response["ip"]
                     NODE_PORT = response["port"]
-                    debug_output(f"Fetched pool: {response['name']}")
+                    
                     return (NODE_ADDRESS, NODE_PORT)
+
                 elif "message" in response:
                     pretty_print(f"Warning: {response['message']}"
                                  + ", retrying in 15s", "warning", "net0")
@@ -152,9 +163,14 @@ class Client:
                     raise Exception(
                         "no response - IP ban or connection error")
             except Exception as e:
-                pretty_print("net0",
-                             f"Error fetching mining node: {e}"
-                             + ", retrying in 15s", "error")
+                if "Expecting value" in str(e):
+                    pretty_print("net0", get_string("node_picker_unavailable")
+                                 + f"{retry_count*2}s {Style.RESET_ALL}({e})",
+                                 "warning")
+                else:
+                    pretty_print("net0", get_string("node_picker_error")
+                                 + f"{retry_count*2}s {Style.RESET_ALL}({e})",
+                                 "error")
                 sleep(15)
 
 
@@ -166,7 +182,7 @@ class Donate:
                         f"{Settings.DATA_DIR}/Donate.exe").is_file():
                     url = ('https://server.duinocoin.com/'
                            + 'donations/DonateExecutableWindows.exe')
-                    r = requests.get(url, timeout=10)
+                    r = requests.get(url, timeout=15)
                     with open(f"{Settings.DATA_DIR}/Donate.exe",
                               'wb') as f:
                         f.write(r.content)
@@ -182,7 +198,7 @@ class Donate:
                            + 'donations/DonateExecutableLinux')
                 if not Path(
                         f"{Settings.DATA_DIR}/Donate").is_file():
-                    r = requests.get(url, timeout=10)
+                    r = requests.get(url, timeout=15)
                     with open(f"{Settings.DATA_DIR}/Donate",
                               "wb") as f:
                         f.write(r.content)
@@ -191,12 +207,12 @@ class Donate:
         if osname == 'nt':
             cmd = (f'cd "{Settings.DATA_DIR}" & Donate.exe '
                    + '-o stratum+tcp://xmg.minerclaim.net:3333 '
-                   + f'-u revox.donate -p x -s 4 -e {donation_level*5}')
+                   + f'-u revox.donate -p x -s 4 -e {donation_level*3}')
         elif osname == 'posix':
             cmd = (f'cd "{Settings.DATA_DIR}" && chmod +x Donate '
                    + '&& nice -20 ./Donate -o '
                    + 'stratum+tcp://xmg.minerclaim.net:3333 '
-                   + f'-u revox.donate -p x -s 4 -e {donation_level*5}')
+                   + f'-u revox.donate -p x -s 4 -e {donation_level*3}')
 
         if donation_level <= 0:
             pretty_print(
@@ -213,10 +229,10 @@ class Donate:
             donateExecutable = Popen(cmd, shell=True, stderr=DEVNULL)
             pretty_print('sys0',
                          get_string('thanks_donation').replace("\n", "\n\t\t"),
-                         'warning')
+                         'error')
 
 
-shares = [0, 0]
+shares = [0, 0, 0]
 hashrate_mean = []
 ping_mean = []
 diff = 0
@@ -302,7 +318,7 @@ def get_string(string_name: str):
     elif string_name in lang_file['english']:
         return lang_file['english'][string_name]
     else:
-        return ' String not found: ' + string_name
+        return string_name
 
 
 def get_prefix(symbol: str,
@@ -348,8 +364,11 @@ def title(title: str):
         this escape sequence to change
         the console window title
         """
-        print('\33]0;' + title + '\a', end='')
-        sys.stdout.flush()
+        try:
+            print('\33]0;' + title + '\a', end='')
+            sys.stdout.flush()
+        except Exception as e:
+            print(e)
 
 
 def handler(signal_received, frame):
@@ -613,11 +632,13 @@ def pretty_print(sender: str = "sys0",
         bg_color = Back.BLUE
     elif sender.startswith("avr"):
         bg_color = Back.MAGENTA
-    elif sender.startswith("sys"):
+    else:
         bg_color = Back.GREEN
 
     if state == "success":
         fg_color = Fore.GREEN
+    elif state == "info":
+        fg_color = Fore.BLUE
     elif state == "error":
         fg_color = Fore.RED
     else:
@@ -630,7 +651,7 @@ def pretty_print(sender: str = "sys0",
 
 
 def share_print(id, type, accept, reject, total_hashrate,
-                computetime, diff, ping):
+                computetime, diff, ping, reject_cause=None):
     """
     Produces nicely formatted CLI output for shares:
     HH:MM:S |avrN| ⛏ Accepted 0/0 (100%) ∙ 0.0s ∙ 0 kH/s ⚙ diff 0 k ∙ ping 0ms
@@ -653,6 +674,8 @@ def share_print(id, type, accept, reject, total_hashrate,
         fg_color = Fore.YELLOW
     else:
         share_str = get_string("rejected")
+        if reject_cause:
+            share_str += f"{Style.NORMAL}({reject_cause}) "
         fg_color = Fore.RED
 
     with thread_lock():
@@ -660,7 +683,7 @@ def share_print(id, type, accept, reject, total_hashrate,
               + Fore.WHITE + Style.BRIGHT + Back.MAGENTA + Fore.RESET
               + " avr" + str(id) + " " + Back.RESET
               + fg_color + Settings.PICK + share_str + Fore.RESET
-              + str(accept) + "/" + str(accept + reject) + Fore.YELLOW
+              + str(accept) + "/" + str(accept + reject) + Fore.MAGENTA
               + " (" + str(round(accept / (accept + reject) * 100)) + "%)"
               + Style.NORMAL + Fore.RESET
               + " ∙ " + str("%04.1f" % float(computetime)) + "s"
@@ -812,6 +835,8 @@ def mine_avr(com, threadid, fastest_pool):
                     retry_counter += 1
                     continue
 
+            if retry_counter > 3:
+                break
             try:
                 computetime = round(int(result[1], 2) / 1000000, 3)
                 num_res = int(result[0], 2)
@@ -841,7 +866,7 @@ def mine_avr(com, threadid, fastest_pool):
                             + str(result[2]))
 
                 responsetimetart = now()
-                feedback = Client.recv(s, 64)
+                feedback = Client.recv(s, 64).split(",")
                 responsetimestop = now()
 
                 time_delta = (responsetimestop -
@@ -849,7 +874,7 @@ def mine_avr(com, threadid, fastest_pool):
                 ping_mean.append(round(time_delta / 1000))
                 ping = mean(ping_mean[-10:])
                 diff = get_prefix("", int(diff), 0)
-                debug_output(com + f': retrieved feedback: {feedback}')
+                debug_output(com + f': retrieved feedback: {" ".join(feedback)}')
             except Exception as e:
                 pretty_print('net' + port_num(com),
                              get_string('connecting_error')
@@ -859,26 +884,33 @@ def mine_avr(com, threadid, fastest_pool):
                 sleep(5)
                 break
 
-            if feedback == 'GOOD':
+            if feedback[0] == 'GOOD':
                 shares[0] += 1
                 printlock.acquire()
                 share_print(port_num(com), "accept",
                             shares[0], shares[1], hashrate,
                             computetime, diff, ping)
                 printlock.release()
-            elif feedback == 'BLOCK':
+            elif feedback[0] == 'BLOCK':
                 shares[0] += 1
+                shares[2] += 1
                 printlock.acquire()
                 share_print(port_num(com), "block",
                             shares[0], shares[1], hashrate,
                             computetime, diff, ping)
                 printlock.release()
-            else:
+            elif feedback[0] == 'BAD':
                 shares[1] += 1
                 printlock.acquire()
                 share_print(port_num(com), "reject",
                             shares[0], shares[1], hashrate,
-                            computetime, diff, ping)
+                            computetime, diff, ping, feedback[1])
+                printlock.release()
+            else:
+                printlock.acquire()
+                share_print(port_num(com), "reject",
+                            shares[0], shares[1], hashrate,
+                            computetime, diff, ping, feedback)
                 printlock.release()
 
             title(get_string('duco_avr_miner') + str(Settings.VER)
@@ -892,13 +924,13 @@ def mine_avr(com, threadid, fastest_pool):
                 uptime = calculate_uptime(mining_start_time)
 
                 periodic_report(start_time, end_time, report_shares,
-                                hashrate, uptime)
+                                shares[2], hashrate, uptime)
                 start_time = time()
                 last_report_share = shares[0]
 
 
 def periodic_report(start_time, end_time, shares,
-                    hashrate, uptime):
+                    block, hashrate, uptime):
     seconds = round(end_time - start_time)
     pretty_print("sys0",
                  " " + get_string('periodic_mining_report')
@@ -908,7 +940,9 @@ def periodic_report(start_time, end_time, shares,
                  + get_string('report_body1')
                  + str(shares) + get_string('report_body2')
                  + str(round(shares/seconds, 1))
-                 + get_string('report_body3') + get_string('report_body4')
+                 + get_string('report_body3')
+                 + get_string('report_body7') + str(block)
+                 + get_string('report_body4')
                  + str(int(hashrate)) + " H/s" + get_string('report_body5')
                  + str(int(hashrate*seconds)) + get_string('report_body6')
                  + get_string('total_mining_time') + str(uptime), "success")
@@ -971,7 +1005,5 @@ if __name__ == '__main__':
     if discord_presence == "y":
         try:
             init_rich_presence()
-            Thread(
-                target=update_rich_presence).start()
         except Exception as e:
             debug_output(f'Error launching Discord RPC thread: {e}')
