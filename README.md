@@ -27,7 +27,7 @@ Finally, connect your USB ESP8266 miner and launch the software (e.g. `python3 .
 
 ## Version
 
-ESP8266_Miner Version 2.75
+ESP8266_Miner Version 3.0
 
 
 # License and Terms of service
