@@ -25,8 +25,6 @@ const uint8_t base36CharValues[75] PROGMEM{
     10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35                    // Lower case letters
 };
 
-extern void lwdtFeed();
-
 #define SPC_TOKEN ' '
 #define END_TOKEN '\n'
 #define SEP_TOKEN ','
@@ -69,12 +67,13 @@ public:
 
     void handleSystemEvents(void) {
         delay(10); // Required vTaskDelay by ESP-IDF
-        lwdtFeed();
         yield();
     }
 
     void mine() {
         askForJob();
+
+        if (getLastBlockHash().length() <= 0) return;
           
         dsha1->reset().write((const unsigned char *)getLastBlockHash().c_str(), getLastBlockHash().length());
 
@@ -102,7 +101,7 @@ public:
                 #endif
 
                 submit(counter, elapsed_time);
-                
+                clearLastBlockHash();
                 break;
             }
         }
@@ -168,23 +167,40 @@ private:
 
     void askForJob() {
         // Wait for serial data
-        while (true) {
-          if (Serial.available() > 0) {
-            client_buffer = Serial.readStringUntil(END_TOKEN);
-            if (client_buffer.length() == 1 && client_buffer[0] == END_TOKEN)
-                client_buffer = "???\n"; // NOTE: Should never happen
-            parse();
-            // Clearing the receive buffer reading one job.
-            while (Serial.available()) Serial.read();
-            break;
-          }
-          
-          if (max_micros_elapsed(micros(), 100000)) {
-              handleSystemEvents();
-          }
+        if (Serial.available() <= 0)
+          return;
+
+        // Reserve 1 extra byte for comma separator (and later zero)
+        char lastBlockHash[40 + 1];
+        char newBlockHash[40 + 1];
+        uint16_t diff;
+      
+        // Read last block hash
+        if (Serial.readBytesUntil(',', lastBlockHash, 41) != 40) {
+          return;
         }
+        lastBlockHash[40] = 0;
+      
+        // Read expected hash
+        if (Serial.readBytesUntil(',', newBlockHash, 41) != 40) {
+          return;
+        }
+        newBlockHash[40] = 0;
+      
+        // Read difficulty
+        diff = strtoul(Serial.readStringUntil(',').c_str(), NULL, 10);
+
+        // put back into string. this is bad code
+        client_buffer = String(lastBlockHash) + "," + String(newBlockHash) + "," + String(diff) + "\n";
+        
+        if (client_buffer.length() == 1 && client_buffer[0] == END_TOKEN)
+            client_buffer = "???\n"; // NOTE: Should never happen
+        parse();
+        // Clearing the receive buffer reading one job.
+        while (Serial.available()) Serial.read();
     }
 
+    void clearLastBlockHash() { last_block_hash = ""; }
     const String &getLastBlockHash() const { return last_block_hash; }
     const String &getExpectedHashStr() const { return expected_hash_str; }
     const uint8_t *getExpectedHash() const { return expected_hash; }
